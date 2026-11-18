@@ -1,0 +1,98 @@
+name: Welcome PR Contributors
+
+# Uses pull_request_target (not pull_request) so the workflow gets a write-scoped
+# token on PRs opened from forks. Never check out PR code in this workflow.
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  thank-contributor:
+    name: Post thank-you comment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Comment on the new PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+
+            // Search lags a second or two behind, so <= 1 covers the case where
+            // this brand-new PR has not been indexed yet.
+            const search = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:pr author:${author}`,
+              per_page: 2,
+            });
+            const isFirstPR = search.data.total_count <= 1;
+
+            const issues = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'open',
+              labels: 'question',
+              per_page: 30,
+            });
+
+            const suggestions = issues.data
+              .filter(i => !i.pull_request)        // the issues API returns PRs too
+              .filter(i => !i.assignee)
+              .filter(i => i.number !== pr.number)
+              .slice(0, 3)
+              .map(i => `- [#${i.number} — ${i.title}](${i.html_url})`)
+              .join('\n');
+
+            const greeting = isFirstPR
+              ? `## 🎉 Welcome aboard, @${author}!\n\nThanks for opening your **first pull request** in this repository — that's a real milestone, and we're glad you're here.`
+              : `## 🙌 Thanks for another one, @${author}!\n\nGreat to see you back.`;
+
+            const reviewNote = `
+            ---
+
+            ### 👀 What happens next
+
+            Your PR is in the queue and **I'm reviewing it now**. Here's how it'll go:
+
+            1. I'll read your code and check it against the acceptance criteria in the linked issue.
+            2. If it looks good → **approve and merge**. 🚀
+            3. If something needs a tweak → I'll leave **inline comments**. Just push new commits to the *same branch*; no need to open a new PR.
+
+            ⏱️ Typical turnaround is **1–3 days**. Feel free to ping me here if it's been longer.`;
+
+            const explore = suggestions
+              ? `
+            ---
+
+            ### 🧭 While you wait — pick up another one
+
+            Don't stop here! These questions are **open and unclaimed** right now:
+
+            ${suggestions}
+
+            👉 [Browse all unclaimed questions](https://github.com/${owner}/${repo}/issues?q=is%3Aissue+is%3Aopen+label%3Aquestion+no%3Aassignee)
+
+            Comment on any of them to claim it.`
+              : `
+            ---
+
+            ### 🧭 While you wait
+
+            👉 [Browse all open questions](https://github.com/${owner}/${repo}/issues?q=is%3Aissue+is%3Aopen+label%3Aquestion)`;
+
+            const footer = `
+            ---
+
+            <sub>📘 New here? Read the [Contributing Guide](https://github.com/${owner}/${repo}/blob/main/CONTRIBUTING.md) and the [Code of Conduct](https://github.com/${owner}/${repo}/blob/main/CODE_OF_CONDUCT.md). Questions? Start a thread in [Discussions](https://github.com/${owner}/${repo}/discussions).</sub>`;
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pr.number,
+              body: [greeting, reviewNote, explore, footer].join('\n'),
+            });
